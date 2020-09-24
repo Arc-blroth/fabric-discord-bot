@@ -4,15 +4,15 @@ import com.gitlab.kordlib.core.event.gateway.ReadyEvent
 import com.kotlindiscord.kord.extensions.ExtensibleBot
 import com.kotlindiscord.kord.extensions.checks.topRoleHigherOrEqual
 import com.kotlindiscord.kord.extensions.extensions.Extension
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.features.json.*
-import io.ktor.client.features.json.serializer.*
-import io.ktor.client.request.*
+import io.ktor.client.HttpClient
+import io.ktor.client.features.json.JsonFeature
+import io.ktor.client.features.json.serializer.KotlinxSerializer
+import io.ktor.client.request.get
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import net.fabricmc.bot.conf.config
 import net.fabricmc.bot.defaultCheck
 import net.fabricmc.bot.enums.Roles
@@ -25,27 +25,31 @@ private const val UPDATE_CHECK_DELAY = 1000L * 60L * 5L
 class VersionCheckExtension(bot: ExtensibleBot) : Extension(bot) {
     override val name = "version check"
 
-    private val client = HttpClient(CIO) {
+    private val client = HttpClient {
         install(JsonFeature) {
-            serializer = KotlinxSerializer()
+            serializer = KotlinxSerializer(Json {
+                ignoreUnknownKeys = true
+            })
         }
     }
 
-    private var minecraftVersions = arrayListOf<MinecraftVersion>()
-    private var jiraVersions = arrayListOf<JiraVersion>()
+    private var minecraftVersions = listOf<MinecraftVersion>()
+    private var jiraVersions = listOf<JiraVersion>()
     private var checkJob: Job? = null
 
     override suspend fun setup() {
         event<ReadyEvent> {
-            minecraftVersions = minecraftVersions()
-            jiraVersions = jiraVersions()
-            if (minecraftVersions.isEmpty() && jiraVersions.isEmpty()){
-                return@event // No point if we don't have anywhere to post.
-            }
-            checkJob = bot.kord.launch {
-                while (true) {
-                    delay(UPDATE_CHECK_DELAY)
-                    updateCheck()
+            action {
+                minecraftVersions = minecraftVersions()
+                jiraVersions = jiraVersions()
+                if (minecraftVersions.isEmpty() && jiraVersions.isEmpty()) {
+                    return@action // No point if we don't have anywhere to post.
+                }
+                checkJob = bot.kord.launch {
+                    while (true) {
+                        delay(UPDATE_CHECK_DELAY)
+                        updateCheck()
+                    }
                 }
             }
         }
@@ -68,7 +72,6 @@ class VersionCheckExtension(bot: ExtensibleBot) : Extension(bot) {
     override suspend fun unload() {
         checkJob?.cancel()
     }
-
 
     private suspend fun updateCheck() {
         checkForMinecraftUpdates()?.run {
@@ -98,11 +101,11 @@ class VersionCheckExtension(bot: ExtensibleBot) : Extension(bot) {
         return new
     }
 
-    private suspend fun jiraVersions(): ArrayList<JiraVersion> =
+    private suspend fun jiraVersions(): List<JiraVersion> =
         client.get("https://bugs.mojang.com/rest/api/latest/project/MC/versions")
 
-    private suspend fun minecraftVersions(): ArrayList<MinecraftVersion> =
-        client.get("https://launchermeta.mojang.com/mc/game/version_manifest.json")
+    private suspend fun minecraftVersions(): List<MinecraftVersion> =
+        client.get<LauncherMetaResponse>("https://launchermeta.mojang.com/mc/game/version_manifest.json").versions
 
 }
 
@@ -110,22 +113,19 @@ class VersionCheckExtension(bot: ExtensibleBot) : Extension(bot) {
 private data class MinecraftVersion(
     val id: String,
     val type: String,
-    val url: String,
-    val time: String,
-    val releaseTime: String
 ) {
-    override fun toString(): String = "A new $type version of minecraft was just released! : $id"
+    override fun toString(): String = "A new $type version of Minecraft was just released! : $id"
 }
 
 @Serializable
+private data class LauncherMetaResponse(
+    val versions: List<MinecraftVersion>,
+)
+
+@Serializable
 private data class JiraVersion(
-    val self: String,
     val id: String,
-    val description: String,
     val name: String,
-    val archived: Boolean,
-    val released: Boolean,
-    val releaseDate: String,
 ) {
-    override fun toString(): String = "A new version ($name) has been added to the minecraft issue tracker!"
+    override fun toString(): String = "A new version ($name) has been added to the Minecraft issue tracker!"
 }
